@@ -68,15 +68,17 @@ export async function refreshSnapshot(): Promise<Snapshot> {
   const opps: YieldOpportunity[] = [...(registry.opps ?? [])];
   let funding: Record<string, any> = {};
 
-  results.forEach((r, i) => {
+    results.forEach((r, i) => {
     const name = names[i];
     if (r.status === "fulfilled") {
       if (name === "funding") {
-        funding = r.value.byExposure ?? {};
-        warnings.push(...(r.value.warnings ?? []));
+        const fr = r.value as { byExposure?: Record<string, any>; warnings?: string[] };
+        funding = fr.byExposure ?? {};
+        warnings.push(...(fr.warnings ?? []));
       } else {
-        opps.push(...(r.value.opps ?? []));
-        warnings.push(...(r.value.warnings ?? []));
+        const ar = r.value as { opps?: YieldOpportunity[]; warnings?: string[] };
+        opps.push(...(ar.opps ?? []));
+        warnings.push(...(ar.warnings ?? []));
       }
     } else {
       warnings.push(`${name} FAILED: ${String(r.reason)}`);
