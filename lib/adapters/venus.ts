@@ -24,13 +24,14 @@ export async function fetchVenus(): Promise<AdapterResult> {
       const sym = (m.underlyingSymbol || m.symbol || "").toUpperCase().replace(/^V/, "");
       if (!sym) continue;
       const asset = sym === "WBNB" ? "BNB" : sym === "BTCB" ? "WBTC" : sym;
-      // Map to our groups; BNB not in correlation groups so skip unknown
       const exposure = exposureOf(asset) ?? (["USDT", "USDC", "DAI"].includes(asset) ? "USD" : null);
       if (!exposure) continue;
 
-      const supplyApy = parseFloat(m.supplyApy ?? m.supplyAPY ?? "0");
-      const borrowApy = parseFloat(m.borrowApy ?? m.borrowAPY ?? "0");
-      const tvl = parseFloat(m.totalSupplyUsd ?? m.liquidityCents ? Number(m.liquidityCents) / 100 : "0") || 0;
+      const supplyApy = parseFloat(String(m.supplyApy ?? m.supplyAPY ?? "0"));
+      const borrowApy = parseFloat(String(m.borrowApy ?? m.borrowAPY ?? "0"));
+      let tvl = 0;
+      if (m.totalSupplyUsd != null) tvl = Number(m.totalSupplyUsd) || 0;
+      else if (m.liquidityCents != null) tvl = Number(m.liquidityCents) / 100 || 0;
 
       if (!isFinite(supplyApy) || supplyApy < MIN_APY) continue;
       if (tvl > 0 && tvl < TVL_FLOOR_USD) continue;
@@ -49,7 +50,7 @@ export async function fetchVenus(): Promise<AdapterResult> {
         nativeYield: 0,
         totalApy: supplyApy,
         apyBase: supplyApy,
-        apyReward: parseFloat(m.supplyXvsApy ?? "0") || 0,
+        apyReward: parseFloat(String(m.supplyXvsApy ?? "0")) || 0,
         apyMean30d: null,
         tvlUsd: tvl || 50_000_000,
         url: "https://venus.io",
