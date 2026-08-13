@@ -1,9 +1,20 @@
 export interface RegistryProtocol {
   id: string;
   name: string;
-  chain: string;
+  website?: string;
+  type?: string;
+  llamaSlug?: string;
+  apiUrl?: string;
+  apiKey?: string;
+  map?: {
+    list?: string;
+    symbol?: string;
+    apyPct?: string;
+    tvlUsd?: string;
+  };
+  chain?: string;
   active: boolean;
-  adapterType: string;
+  adapterType?: string;
   endpointUrl?: string;
   notes?: string;
   createdAt?: string;
