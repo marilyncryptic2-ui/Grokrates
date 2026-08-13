@@ -8,7 +8,7 @@ import { round2 } from "./strategies/looping";
 import { buildRoute, type PoolLite, type RouteResult } from "./strategies/route";
 import { groupOf, isLoopableProtocol, effectiveLtv } from "./config/groups";
 import type { FundingInfo } from "./adapters/funding";
-import { fetchSheetPools, type PoolDataRow } from "../sheetAdapter";
+import { fetchSheetPools, type PoolDataRow } from "./sheetAdapter";
 
 // ═══ Strategy Construction ════════════════════════════════════════
 // Multi-venue route engine incorporates park-aware optimal stops.
