@@ -6,16 +6,26 @@ interface Props {
 }
 
 export const RouteDisplay: React.FC<Props> = ({ route }) => {
+  // Access leverage safely without triggering TypeScript property errors
+  const routeRecord = route as Record<string, any>;
+  const leverageValue =
+    routeRecord.netLeverage ??
+    routeRecord.leverage ??
+    routeRecord.effectiveLeverage ??
+    (routeRecord.totalSupplyUsd && routeRecord.principalUsd
+      ? routeRecord.totalSupplyUsd / routeRecord.principalUsd
+      : null);
+
   return (
     <div className="bg-slate-900 text-white p-6 rounded-xl border border-slate-800 shadow-xl">
       {/* Route Header Stats */}
       <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-4 mb-6">
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            {route.group ? `${route.group} Optimal Route` : "Optimal Multi-Venue Route"}
+            {routeRecord.group ? `${routeRecord.group} Optimal Route` : "Optimal Multi-Venue Route"}
           </h3>
           <div className="text-3xl font-extrabold text-emerald-400">
-            {route.netApy.toFixed(2)}% <span className="text-sm font-normal text-slate-300">NET APY</span>
+            {typeof route.netApy === 'number' ? route.netApy.toFixed(2) : '0.00'}% <span className="text-sm font-normal text-slate-300">NET APY</span>
           </div>
         </div>
         
@@ -23,26 +33,26 @@ export const RouteDisplay: React.FC<Props> = ({ route }) => {
           <div>
             <div className="text-xs text-slate-400">Effective Leverage</div>
             <div className="text-lg font-bold text-slate-200">
-              {route.netLeverage ? `${route.netLeverage.toFixed(2)}x` : "1.00x"}
+              {typeof leverageValue === 'number' ? `${leverageValue.toFixed(2)}x` : "1.00x"}
             </div>
           </div>
           <div>
             <div className="text-xs text-slate-400">Route Capital</div>
             <div className="text-sm font-mono font-semibold text-slate-200 mt-1">
-              ${(route.principalUsd || 10000).toLocaleString()} USD
+              ${(routeRecord.principalUsd || 10000).toLocaleString()} USD
             </div>
           </div>
         </div>
       </div>
 
-      {/* Execution Route Step Flow */}
+      {/* Execution Path Flow */}
       <div className="space-y-3">
         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
           Multi-Venue Execution Path
         </h4>
         
         {route.steps && route.steps.length > 0 ? (
-          route.steps.map((step, idx) => {
+          route.steps.map((step: any, idx: number) => {
             const actionStr = typeof step === 'string' ? step : step.action || 'SUPPLY';
             const isSupply = actionStr.includes('SUPPLY') || actionStr.includes('Lend') || actionStr.includes('Deposit');
             const isPark = actionStr.includes('PARK') || actionStr.includes('Park');
@@ -65,21 +75,21 @@ export const RouteDisplay: React.FC<Props> = ({ route }) => {
                   </span>
                   <div>
                     <div className="font-semibold text-slate-100 text-sm">
-                      {typeof step === 'string' ? step : `${step.asset} on ${step.venue} (${step.chain})`}
+                      {typeof step === 'string' ? step : `${step.asset || ''} on ${step.venue || ''} (${step.chain || ''})`}
                     </div>
                   </div>
                 </div>
 
                 {typeof step !== 'string' && step.apy != null && (
                   <div className="text-right">
-                    <div className="text-sm font-semibold text-slate-200">{step.apy.toFixed(2)}% APY</div>
+                    <div className="text-sm font-semibold text-slate-200">{Number(step.apy).toFixed(2)}% APY</div>
                   </div>
                 )}
               </div>
             );
           })
         ) : (
-          <div className="text-xs text-slate-500 italic">No intermediate steps required for this route.</div>
+          <div className="text-xs text-slate-500 italic">No intermediate route steps required.</div>
         )}
       </div>
     </div>
