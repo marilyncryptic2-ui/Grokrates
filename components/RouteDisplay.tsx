@@ -12,7 +12,7 @@ export const RouteDisplay: React.FC<Props> = ({ route }) => {
       <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-4 mb-6">
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-           {route.group ? `${route.group} Optimal Route` : "Optimal Multi-Venue Route"}
+            {route.group ? `${route.group} Optimal Route` : "Optimal Multi-Venue Route"}
           </h3>
           <div className="text-3xl font-extrabold text-emerald-400">
             {route.netApy.toFixed(2)}% <span className="text-sm font-normal text-slate-300">NET APY</span>
@@ -23,7 +23,7 @@ export const RouteDisplay: React.FC<Props> = ({ route }) => {
           <div>
             <div className="text-xs text-slate-400">Effective Leverage</div>
             <div className="text-lg font-bold text-slate-200">
-              {route.leverage ? `${route.leverage.toFixed(2)}x` : "1.00x"}
+              {route.effectiveLeverage ? `${route.effectiveLeverage.toFixed(2)}x` : "1.00x"}
             </div>
           </div>
           <div>
