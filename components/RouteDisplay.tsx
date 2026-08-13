@@ -23,7 +23,7 @@ export const RouteDisplay: React.FC<Props> = ({ route }) => {
           <div>
             <div className="text-xs text-slate-400">Effective Leverage</div>
             <div className="text-lg font-bold text-slate-200">
-              {route.effectiveLeverage ? `${route.effectiveLeverage.toFixed(2)}x` : "1.00x"}
+              {route.leverage ? `${route.leverage.toFixed(2)}x` : "1.00x"}
             </div>
           </div>
           <div>
