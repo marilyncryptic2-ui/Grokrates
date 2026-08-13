@@ -1,3 +1,14 @@
+export interface RegistryProtocol {
+  id: string;
+  name: string;
+  chain: string;
+  active: boolean;
+  adapterType: string;
+  endpointUrl?: string;
+  notes?: string;
+  createdAt?: string;
+}
+
 export type ExposureGroup = "USD" | "ETH" | "BTC" | "SOL" | "RWA";
 
 export interface YieldOpportunity {
