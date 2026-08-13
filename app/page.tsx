@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic';
 import { buildSnapshotFromSheet } from '../lib/engine';
 import { RouteDisplay } from '../components/RouteDisplay';
 
