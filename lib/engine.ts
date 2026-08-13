@@ -8,22 +8,15 @@ import { round2 } from "./strategies/looping";
 import { buildRoute, type PoolLite, type RouteResult } from "./strategies/route";
 import { groupOf, isLoopableProtocol, effectiveLtv } from "./config/groups";
 import type { FundingInfo } from "./adapters/funding";
+import { fetchSheetPools, type PoolDataRow } from "../sheetAdapter";
 
-// ═══ Strategy construction ════════════════════════════════════════
-// Loops live in the multi-venue route engine (buildRoute / snapshot.routes).
-// Per-venue StrategyResult rows only carry: fixed (Pendle PT) and rate-arb.
-// Single-venue buildLoop and delta-neutral are fully retired.
-
+// ═══ Strategy Construction ════════════════════════════════════════
+// Multi-venue route engine incorporates park-aware optimal stops.
 
 function effective(o: YieldOpportunity): number {
-  // Total yield the holder actually earns.
-  // Native-source pools (Lido, Sky, Ethena, LSTs…): apy already IS the native
-  // yield and nativeYield === apy → return apy once (no double-count).
-  // Venue pools (Aave, Morpho…): venue rate + any attached native yield on the
-  // same asset (e.g. supplying wstETH earns Aave supply APY + Lido staking).
   const venueReal = o.apyMean30d != null ? o.apyMean30d : o.apy;
   if (o.nativeYield > 0 && Math.abs(o.nativeYield - o.apy) < 1e-9) {
-    return round2(venueReal); // pure native source
+    return round2(venueReal);
   }
   return round2(venueReal + (o.nativeYield > 0 ? o.nativeYield : 0));
 }
@@ -75,7 +68,36 @@ function buildRateArb(bestLend: YieldOpportunity, cheapBorrow: YieldOpportunity)
   };
 }
 
-// ═══ Assembly: venue rows -> asset groups -> board -> top10 ═══════
+// ═══ Assembly: Google Sheet -> Venue rows -> Board -> Top10 ═══════
+
+export async function buildSnapshotFromSheet(
+  funding: Record<string, FundingInfo>,
+  warnings: string[]
+): Promise<Snapshot> {
+  // 1. Fetch raw pool data from published Google Sheet adapter
+  const sheetData: PoolDataRow[] = await fetchSheetPools();
+
+  // Map Google Sheet pool rows to YieldOpportunity type
+  const opps: YieldOpportunity[] = sheetData.map((row, idx) => ({
+    id: `${row.venue.toLowerCase()}-${row.asset.toLowerCase()}-${idx}`,
+    protocol: row.venue.toLowerCase(),
+    protocolLabel: row.venue,
+    chain: row.chain,
+    asset: row.asset,
+    apy: row.supplyApy,
+    apyMean30d: row.supplyApy,
+    borrowApy: row.borrowApy,
+    ltv: row.ltv,
+    tvlUsd: row.tvlUsd,
+    nativeYield: 0,
+    exposure: (row.group || "USD") as ExposureGroup,
+    flags: [],
+    url: "",
+    exitTerms: ""
+  }));
+
+  return buildSnapshotFromData(opps, funding, warnings);
+}
 
 export function buildSnapshotFromData(
   opps: YieldOpportunity[],
@@ -85,16 +107,11 @@ export function buildSnapshotFromData(
   const clean = opps.filter((o) => !o.flags.includes("apy-implausible"));
   const borrowables = clean.filter((o) => o.borrowApy != null);
 
-  // Per-asset best-lend / cheapest-borrow (for rate arb), USD assets only
-  // where both sides exist and the asset is a plain lending asset.
   const arbAssets = ["USDC", "USDT", "DAI", "USDS", "WETH", "SOL", "WSOL"];
 
   const venueRowsByAsset = new Map<string, VenueRow[]>();
   for (const o of clean) {
-    if (o.flags.includes("pt-fixed")) continue; // PTs attach as strategies, not rows
-    // Loop product is the multi-venue route engine (snapshot.routes), not a
-    // per-venue StrategyResult. Fixed (Pendle) and rate-arb still attach here.
-    // Delta-neutral and single-venue buildLoop are fully retired.
+    if (o.flags.includes("pt-fixed")) continue;
     const strategies: StrategyResult[] = [];
     const key = displayName(o.asset);
     const arr = venueRowsByAsset.get(key) ?? [];
@@ -102,7 +119,7 @@ export function buildSnapshotFromData(
     venueRowsByAsset.set(key, arr);
   }
 
-  // Attach PT fixed to the matching asset's best venue row.
+  // Attach PT fixed strategies
   const pts = clean.filter((o) => o.flags.includes("pt-fixed"));
   for (const pt of pts) {
     const rows = venueRowsByAsset.get(displayName(pt.asset));
@@ -114,7 +131,7 @@ export function buildSnapshotFromData(
     }
   }
 
-  // Rate arb per arb asset.
+  // Rate arb per arb asset
   for (const asset of arbAssets) {
     const lends = clean.filter((o) => o.asset === asset && !o.flags.includes("pt-fixed"));
     const borrows = borrowables.filter((o) => o.asset === asset);
@@ -129,7 +146,7 @@ export function buildSnapshotFromData(
     if (target && !target.strategies.some((s) => s.kind === "rate-arb")) target.strategies.push(arb);
   }
 
-  // Groups
+  // Grouping
   const groups: AssetGroupRow[] = [];
   for (const [asset, venues] of venueRowsByAsset) {
     venues.sort((a, b) => effective(b.opp) - effective(a.opp));
@@ -163,7 +180,7 @@ export function buildSnapshotFromData(
     return { exposure, baseApy, baseVenue, overlayApy, overlayLabel, overlayVenue };
   }).filter((b) => b.baseApy != null);
 
-  // Top 10: bases + strategies compete, ranked by realized effective.
+  // Top 10
   const candidates: Snapshot["top10"] = [];
   for (const g of groups) {
     candidates.push({
@@ -187,6 +204,7 @@ export function buildSnapshotFromData(
     .slice(0, 10)
     .map((c, i) => ({ ...c, rank: i + 1 }));
 
+  // Build multi-venue route paths with park-awareness
   const routes = buildRoutes(clean);
 
   return {
@@ -196,28 +214,21 @@ export function buildSnapshotFromData(
   };
 }
 
-// ── Wire real pool data into the route engine ──
-// Map opportunities to PoolLite, then run the greedy route engine once per
-// correlation group, starting from the group's deepest-TVL asset.
+// ── Multi-Venue Route Engine (Park-Aware) ──
 function buildRoutes(opps: YieldOpportunity[]): RouteResult[] {
   const pools: PoolLite[] = opps.map((o) => {
-    // Use the real e-mode LTV for correlated pairs where we have it; the
-    // route engine only borrows same-group assets, so e-mode is the correct
-    // LTV. Falls back to the live standard-mode LTV from the feed.
     const ltv = effectiveLtv(o.protocol, o.asset, o.ltv);
     return {
       asset: o.asset.toUpperCase(),
       venue: o.protocolLabel,
       chain: o.chain,
-      supplyApy: effective(o), // realized total yield (native + venue rate)
+      supplyApy: effective(o),
       borrowApy: o.borrowApy,
       poolLtv: ltv,
       loopable: isLoopableProtocol(o.protocol) && o.borrowApy != null && o.borrowApy >= 0.01 && ltv != null && ltv > 0,
     };
   });
 
-  // Starting asset per group = the one with the most pools (proxy for depth),
-  // among assets that are actually in a correlation group.
   const byGroup = new Map<string, Map<string, number>>();
   for (const p of pools) {
     const g = groupOf(p.asset);
@@ -229,7 +240,6 @@ function buildRoutes(opps: YieldOpportunity[]): RouteResult[] {
 
   const routes: RouteResult[] = [];
   for (const [, assetCounts] of byGroup) {
-    // Try the top few candidate start assets in the group; keep the best route.
     const starts = [...assetCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map((e) => e[0]);
     let best: RouteResult | null = null;
     for (const startAsset of starts) {
