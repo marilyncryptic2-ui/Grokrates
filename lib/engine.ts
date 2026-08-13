@@ -1,9 +1,7 @@
 import type {
   AssetGroupRow, BoardEntry, ExposureGroup, Snapshot, StrategyResult, VenueRow, YieldOpportunity,
 } from "./types";
-import {
-  RATE_ARB_MIN_SPREAD, displayName,
-} from "./config/curation";
+import { RATE_ARB_MIN_SPREAD, displayName } from "./config/curation";
 import { round2 } from "./strategies/looping";
 import { buildRoute, type PoolLite, type RouteResult } from "./strategies/route";
 import { groupOf, isLoopableProtocol, effectiveLtv } from "./config/groups";
@@ -64,9 +62,6 @@ function buildRateArb(bestLend: YieldOpportunity, cheapBorrow: YieldOpportunity)
   };
 }
 
-/**
- * Maps CSV rows from Google Sheet to strict YieldOpportunity types.
- */
 export async function buildSnapshotFromSheet(
   funding: Record<string, FundingInfo>,
   warnings: string[]
@@ -104,6 +99,9 @@ export async function buildSnapshotFromSheet(
       rewardTokens: [],
       underlyingTokens: [assetName],
       poolMeta: null,
+      liquidationThreshold: ltv,
+      access: "public",
+      updatedAt: new Date().toISOString(),
     };
   });
 
@@ -113,7 +111,7 @@ export async function buildSnapshotFromSheet(
 export function buildSnapshotFromData(
   opps: YieldOpportunity[],
   _funding: Record<string, FundingInfo>,
-  warnings: string[],
+  warnings: string[]
 ): Snapshot {
   const clean = opps.filter((o) => !o.flags.includes("apy-implausible"));
   const borrowables = clean.filter((o) => o.borrowApy != null);
@@ -177,12 +175,18 @@ export function buildSnapshotFromData(
     let overlayApy: number | null = null, overlayLabel: string | null = null, overlayVenue: string | null = null;
     for (const g of inGroup) {
       const e = effective(g.best.opp);
-      if (baseApy == null || e > baseApy) { baseApy = e; baseVenue = `${g.asset} · ${g.best.opp.protocolLabel}`; }
-      for (const v of g.venues) for (const s of v.strategies) {
-        if (overlayApy == null || s.netApy > overlayApy) {
-          overlayApy = s.netApy; overlayLabel = s.label; overlayVenue = `${g.asset} · ${v.opp.protocolLabel}`;
-        }
+      if (baseApy == null || e > baseApy) {
+        baseApy = e;
+        baseVenue = `${g.asset} · ${g.best.opp.protocolLabel}`;
       }
+      for (const v of g.venues)
+        for (const s of v.strategies) {
+          if (overlayApy == null || s.netApy > overlayApy) {
+            overlayApy = s.netApy;
+            overlayLabel = s.label;
+            overlayVenue = `${g.asset} · ${v.opp.protocolLabel}`;
+          }
+        }
     }
     return { exposure, baseApy, baseVenue, overlayApy, overlayLabel, overlayVenue };
   }).filter((b) => b.baseApy != null);
@@ -190,22 +194,37 @@ export function buildSnapshotFromData(
   const candidates: Snapshot["top10"] = [];
   for (const g of groups) {
     candidates.push({
-      rank: 0, asset: g.asset, venue: g.best.opp.protocolLabel, chain: g.best.opp.chain,
-      strategyLabel: null, effectiveApy: effective(g.best.opp), tvlUsd: g.best.opp.tvlUsd, url: g.best.opp.url,
+      rank: 0,
+      asset: g.asset,
+      venue: g.best.opp.protocolLabel,
+      chain: g.best.opp.chain,
+      strategyLabel: null,
+      effectiveApy: effective(g.best.opp),
+      tvlUsd: g.best.opp.tvlUsd,
+      url: g.best.opp.url,
     });
-    for (const v of g.venues) for (const s of v.strategies) {
-      candidates.push({
-        rank: 0, asset: g.asset, venue: v.opp.protocolLabel, chain: v.opp.chain,
-        strategyLabel: s.label, effectiveApy: s.netApy, tvlUsd: v.opp.tvlUsd, url: v.opp.url,
-      });
-    }
+    for (const v of g.venues)
+      for (const s of v.strategies) {
+        candidates.push({
+          rank: 0,
+          asset: g.asset,
+          venue: v.opp.protocolLabel,
+          chain: v.opp.chain,
+          strategyLabel: s.label,
+          effectiveApy: s.netApy,
+          tvlUsd: v.opp.tvlUsd,
+          url: v.opp.url,
+        });
+      }
   }
   const seen = new Set<string>();
   const top10 = candidates
     .sort((a, b) => b.effectiveApy - a.effectiveApy)
     .filter((c) => {
       const k = `${c.asset}:${c.venue}:${c.strategyLabel ?? "base"}`;
-      if (seen.has(k)) return false; seen.add(k); return true;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
     })
     .slice(0, 10)
     .map((c, i) => ({ ...c, rank: i + 1 }));
@@ -214,7 +233,11 @@ export function buildSnapshotFromData(
 
   return {
     updatedAt: new Date().toISOString(),
-    groups, board, top10, routes, warnings,
+    groups,
+    board,
+    top10,
+    routes,
+    warnings,
     poolCount: clean.length,
   };
 }
