@@ -10,9 +10,6 @@ import { groupOf, isLoopableProtocol, effectiveLtv } from "./config/groups";
 import type { FundingInfo } from "./adapters/funding";
 import { fetchSheetPools, type PoolDataRow } from "./sheetAdapter";
 
-// ═══ Strategy Construction ════════════════════════════════════════
-// Multi-venue route engine incorporates park-aware optimal stops.
-
 function effective(o: YieldOpportunity): number {
   const venueReal = o.apyMean30d != null ? o.apyMean30d : o.apy;
   if (o.nativeYield > 0 && Math.abs(o.nativeYield - o.apy) < 1e-9) {
@@ -24,19 +21,19 @@ function effective(o: YieldOpportunity): number {
 function buildFixed(pt: YieldOpportunity): StrategyResult {
   return {
     kind: "fixed",
-    label: `Fixed ${pt.exitTerms.replace("matures ", "to ")}`,
+    label: `Fixed ${pt.exitTerms ? pt.exitTerms.replace("matures ", "to ") : "Maturity"}`,
     netApy: round2(pt.apy),
     leverage: null, maxLeverage: null, liquidationBufferPct: null, breakEvenBorrowApy: null,
     stages: null,
     protocolsUsed: ["Pendle"],
     steps: [
       `Buy PT-${displayName(pt.asset)} on Pendle (${pt.chain}) at today's discount.`,
-      `The PT redeems 1:1 at maturity (${pt.exitTerms.replace("matures ", "")}) — that discount is a locked ${round2(pt.apy)}% annualized.`,
-      `Nothing to manage until maturity.`,
+      `Redeems 1:1 at maturity — locked ${round2(pt.apy)}% annualized yield.`,
+      `Hold to term.`,
     ],
     risks: [
-      `Exiting before maturity means selling the PT at market price — the rate is only guaranteed if held to term.`,
-      `Underlying protocol risk (the yield source backing ${displayName(pt.asset)}) still applies.`,
+      `Exiting before maturity subject to market pricing.`,
+      `Underlying protocol yield risk applies.`,
     ],
     basedOn: pt.id,
   };
@@ -55,46 +52,60 @@ function buildRateArb(bestLend: YieldOpportunity, cheapBorrow: YieldOpportunity)
     stages: null,
     protocolsUsed: [cheapBorrow.protocolLabel, bestLend.protocolLabel],
     steps: [
-      `Borrow ${displayName(bestLend.asset)} on ${cheapBorrow.protocolLabel} (${cheapBorrow.chain}) at ${round2(cheapBorrow.borrowApy)}% against collateral you already hold.`,
-      `Lend it on ${bestLend.protocolLabel} (${bestLend.chain}) at ${round2(lend)}% realized.`,
-      `The ${spread} pt spread is yours until rates converge — this is yield on borrowed money, on top of whatever your collateral earns.`,
+      `Borrow ${displayName(bestLend.asset)} on ${cheapBorrow.protocolLabel} (${cheapBorrow.chain}) at ${round2(cheapBorrow.borrowApy)}%.`,
+      `Lend on ${bestLend.protocolLabel} (${bestLend.chain}) at ${round2(lend)}%.`,
+      `Capture net ${spread} pt spread.`,
     ],
     risks: [
-      `The spread compresses as capital piles in; the borrow rate can spike above the lend rate — exit when the spread closes.`,
-      `Your borrow creates liquidation risk against your collateral — size conservatively.`,
-      `Uses the realized lend rate, not advertised — advertised is ${round2(bestLend.apy)}%.`,
+      `Rate spread compression risk as utilization shifts.`,
+      `Liquidation exposure against collateral.`,
     ],
     basedOn: bestLend.id,
   };
 }
 
-// ═══ Assembly: Google Sheet -> Venue rows -> Board -> Top10 ═══════
-
+/**
+ * Maps CSV rows from Google Sheet to strict YieldOpportunity types.
+ */
 export async function buildSnapshotFromSheet(
   funding: Record<string, FundingInfo>,
   warnings: string[]
 ): Promise<Snapshot> {
-  // 1. Fetch raw pool data from published Google Sheet adapter
   const sheetData: PoolDataRow[] = await fetchSheetPools();
 
-  // Map Google Sheet pool rows to YieldOpportunity type
-  const opps: YieldOpportunity[] = sheetData.map((row, idx) => ({
-    id: `${row.venue.toLowerCase()}-${row.asset.toLowerCase()}-${idx}`,
-    protocol: row.venue.toLowerCase(),
-    protocolLabel: row.venue,
-    chain: row.chain,
-    asset: row.asset,
-    apy: row.supplyApy,
-    apyMean30d: row.supplyApy,
-    borrowApy: row.borrowApy,
-    ltv: row.ltv,
-    tvlUsd: row.tvlUsd,
-    nativeYield: 0,
-    exposure: (row.group || "USD") as ExposureGroup,
-    flags: [],
-    url: "",
-    exitTerms: ""
-  }));
+  const opps: YieldOpportunity[] = sheetData.map((row, idx) => {
+    const supplyApy = Number(row.supplyApy) || 0;
+    const borrowApy = row.borrowApy != null && !isNaN(Number(row.borrowApy)) ? Number(row.borrowApy) : null;
+    const ltv = row.ltv != null && !isNaN(Number(row.ltv)) ? Number(row.ltv) : null;
+    const tvlUsd = Number(row.tvlUsd) || 0;
+    const venueName = row.venue || "Unknown";
+    const assetName = row.asset || "USD";
+
+    return {
+      id: `${venueName.toLowerCase()}-${assetName.toLowerCase()}-${idx}`,
+      protocol: venueName.toLowerCase(),
+      protocolLabel: venueName,
+      chain: row.chain || "Base",
+      asset: assetName,
+      apy: supplyApy,
+      apyMean30d: supplyApy,
+      borrowApy: borrowApy,
+      ltv: ltv,
+      tvlUsd: tvlUsd,
+      nativeYield: 0,
+      exposure: (row.group || "USD") as ExposureGroup,
+      flags: [],
+      url: "",
+      exitTerms: "",
+      source: venueName,
+      totalApy: supplyApy,
+      apyBase: supplyApy,
+      apyReward: 0,
+      rewardTokens: [],
+      underlyingTokens: [assetName],
+      poolMeta: null,
+    };
+  });
 
   return buildSnapshotFromData(opps, funding, warnings);
 }
@@ -119,7 +130,6 @@ export function buildSnapshotFromData(
     venueRowsByAsset.set(key, arr);
   }
 
-  // Attach PT fixed strategies
   const pts = clean.filter((o) => o.flags.includes("pt-fixed"));
   for (const pt of pts) {
     const rows = venueRowsByAsset.get(displayName(pt.asset));
@@ -131,7 +141,6 @@ export function buildSnapshotFromData(
     }
   }
 
-  // Rate arb per arb asset
   for (const asset of arbAssets) {
     const lends = clean.filter((o) => o.asset === asset && !o.flags.includes("pt-fixed"));
     const borrows = borrowables.filter((o) => o.asset === asset);
@@ -146,7 +155,6 @@ export function buildSnapshotFromData(
     if (target && !target.strategies.some((s) => s.kind === "rate-arb")) target.strategies.push(arb);
   }
 
-  // Grouping
   const groups: AssetGroupRow[] = [];
   for (const [asset, venues] of venueRowsByAsset) {
     venues.sort((a, b) => effective(b.opp) - effective(a.opp));
@@ -162,7 +170,6 @@ export function buildSnapshotFromData(
   }
   groups.sort((a, b) => effective(b.best.opp) - effective(a.best.opp));
 
-  // Board
   const GROUP_ORDER: ExposureGroup[] = ["ETH", "BTC", "SOL", "USD", "RWA"];
   const board: BoardEntry[] = GROUP_ORDER.map((exposure) => {
     const inGroup = groups.filter((g) => g.exposure === exposure);
@@ -180,7 +187,6 @@ export function buildSnapshotFromData(
     return { exposure, baseApy, baseVenue, overlayApy, overlayLabel, overlayVenue };
   }).filter((b) => b.baseApy != null);
 
-  // Top 10
   const candidates: Snapshot["top10"] = [];
   for (const g of groups) {
     candidates.push({
@@ -204,7 +210,6 @@ export function buildSnapshotFromData(
     .slice(0, 10)
     .map((c, i) => ({ ...c, rank: i + 1 }));
 
-  // Build multi-venue route paths with park-awareness
   const routes = buildRoutes(clean);
 
   return {
@@ -214,7 +219,6 @@ export function buildSnapshotFromData(
   };
 }
 
-// ── Multi-Venue Route Engine (Park-Aware) ──
 function buildRoutes(opps: YieldOpportunity[]): RouteResult[] {
   const pools: PoolLite[] = opps.map((o) => {
     const ltv = effectiveLtv(o.protocol, o.asset, o.ltv);
